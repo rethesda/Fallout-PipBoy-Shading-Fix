@@ -2,24 +2,35 @@
 
 NVSEInterface* g_nvseInterface{};
 
-void PatchMemoryNop(ULONG_PTR Address, SIZE_T Size)
+void SafeWrite32(UInt32 addr, UInt32 data)
 {
-	DWORD d = 0;
-	VirtualProtect((LPVOID)Address, Size, PAGE_EXECUTE_READWRITE, &d);
+	UInt32	oldProtect;
 
-	for (SIZE_T i = 0; i < Size; i++)
-		*(volatile BYTE*)(Address + i) = 0x90; //0x90 == opcode for NOP
+	VirtualProtect((void*)addr, 4, PAGE_EXECUTE_READWRITE, &oldProtect);
+	*((UInt32*)addr) = data;
+	VirtualProtect((void*)addr, 4, oldProtect, &oldProtect);
+}
 
-	VirtualProtect((LPVOID)Address, Size, d, &d);
+void ReplaceCall(UInt32 jumpSrc, UInt32 jumpTgt)
+{
+	SafeWrite32(jumpSrc + 1, jumpTgt - jumpSrc - 1 - 4);
+}
+template <typename T_Ret = UInt32, typename ...Args>
+__forceinline T_Ret ThisStdCall(UInt32 _addr, const void* _this, Args ...args)
+{
+	return ((T_Ret(__thiscall*)(const void*, Args...))_addr)(_this, std::forward<Args>(args)...);
+}
 
-	FlushInstructionCache(GetCurrentProcess(), (LPVOID)Address, Size);
+static void __fastcall CullerFrustumFixHook(DWORD* apThis, void*, DWORD* apCamera) {
+	apThis[3] = (DWORD)apCamera;
+	ThisStdCall(0xA694A0, apThis, apCamera + 55);
 }
 
 bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
 {
 	info->infoVersion = PluginInfo::kInfoVersion;
 	info->name = "PipBoyShadingFix";
-	info->version = 1;
+	info->version = 2;
 
 	return true;
 }
@@ -27,7 +38,7 @@ bool NVSEPlugin_Query(const NVSEInterface* nvse, PluginInfo* info)
 bool NVSEPlugin_Load(NVSEInterface* nvse)
 {
 	if (!nvse->isEditor) {
-		PatchMemoryNop(0x87091F, 5);
+		ReplaceCall(0x87090A, (UInt32)CullerFrustumFixHook);
 	}
 
 	return true;
